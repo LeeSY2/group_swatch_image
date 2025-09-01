@@ -1,78 +1,64 @@
--- 서비스명: 그룹상품 스와치 이미지
--- --> 그룹상품의 이미지를 썸네일에 함께 노출 여부에 따른 검색 지표 비교
--- 추출 기간 (기간합산)
--- (작업 전) 6월 16일  ~ 30일
--- (작업 후/ 광고는 플러스만 반영) 7월 17일 ~ 7 월31일
--- (작업 후/ 전 영역 확대) 8월 1일 ~ 8월 7일
--- POC: 전체
--- 구분: OM / 직방, 제휴 전체
--- 추출항목 및 기준 :
--- (1) 스니펫 _ 오브젝트 내 그룹이미지 Y/N 에 따른 검색지표 비교
--- snippet_object:{...has_grp_image":"N"}
--- (2) 영역: focus, plus, common,  power, ad_highlyrated, curaion, opendeal atier, martplus, catalog.comm~
--- (2) 추출 값: imp. click. cnt,24_via_amt, 24_via_cnt ,ictr, icvr, qctr, qcvr
+-- (보안 이슈로 원래 쿼리를 비식별화 버전 입니다.)
+-- Service: Grouped Product Swatch Image (Anonymized)
+-- Goal: Compare search KPIs by snippet_object.has_grp_image = Y/N
+-- Period (sum over range): e.g., pre / post(plus) / post(full)
+-- Scope: all
+-- Metrics: imprs, clicks, 24_via_cnt, 24_via_amt, ictr, icvr, qctr, qcvr
 
-SET hivevar:vBGN_DT = 20250801;-- 조회시작일자
-SET hivevar:vEND_DT = 20250807;-- 조회종료일자 
+SET hivevar:vSTART_DT = 20250801; -- 조회시작일자 (yyyyMMdd)
+SET hivevar:vEND_DT   = 20250807; -- 조회종료일자 (yyyyMMdd)
 
+WITH base AS (
+  SELECT
+      NVL(get_json_object(body, '$.snippet_object.has_grp_image'), '#') AS has_grp_image,
+      NVL(COUNT(DISTINCT IF(t2.page_type = 'SEARCH', t2.query_group_id, NULL)), 0) AS qc,
+      NVL(SUM(IF(t2.imprs_yn = 'Y', 1, 0)), 0) AS imprs_cnt,
+      NVL(SUM(IF(t2.clk_yn   = 'Y', 1, 0)), 0) AS clk_cnt
+  FROM (
+      SELECT t1.*
+      FROM analytics.search_event_log t1
+      WHERE t1.dt BETWEEN '${vSTART_DT}' AND '${vEND_DT}'
+        -- AND t1.poc IN ('app','mw')
+        -- AND t1.traffic_partner IN ('partnerA')
+        AND t1.page_id NOT IN ('/search_result/tab/external_a','/search_result/external_b')
+        AND NVL(t1.vertical_yn, 'N') = 'N'
+        AND t1.keyword NOT IN ('#','','-')
+  ) t2
+  GROUP BY NVL(get_json_object(body, '$.snippet_object.has_grp_image'), '#')
+),
 
-with base as (
-    select 
-        nvl(get_json_object(body, '$.snippet_object.has_grp_image'), '#') as has_grp_image,
-        nvl(count(distinct if(t2.page_type='검색',t2.keyword_grp_id, null)),0) as qc,
-        nvl(sum(if(t2.imprs_yn='Y',1,0)),0) as imprs_cnt,
-        nvl(sum(if(t2.clk_yn='Y',1,0)),0) as clk_cnt
-    from
-        (
-        select t1.*
-        from search.sch_11st_log_client_base t1
-        where t1.dt between '${vBGN_DT}' and '${vEND_DT}'
-        -- and t1.poc_cl_cd in ('app','mw')
-        -- and t1.alcmpn_drct_vst_fg_nm in ('직방')
-        and t1.page_id not in ('/search_result/tab/amazontab','/search_result/amazon')
-        and nvl(t1.vertical_yn, 'N') = 'N'
-        and t1.keyword not in ('#','','-')
-        ) t2
-    group by nvl(get_json_object(body, '$.snippet_object.has_grp_image'), '#')
+via AS (
+  SELECT
+      NVL(get_json_object(link_log_body, '$.snippet_object.has_grp_image'), '#') AS has_grp_image,
+      NVL(SUM(IF(t1.is_24via = '1', t1.weight, 0)), 0) AS 24_via_cnt, -- 24h 경유 주문건수
+      NVL(SUM(IF(t1.is_24via = '1', t1.amt,    0)), 0) AS 24_via_amt  -- 24h 경유 거래액
+  FROM (
+      SELECT t1.*
+      FROM analytics.search_via_amt_order t1
+      WHERE t1.ord_date  BETWEEN '${vSTART_DT}'
+                           AND from_unixtime(unix_timestamp('${vEND_DT}','yyyyMMdd') + 3600*24*1, 'yyyyMMdd')
+        AND t1.part_date BETWEEN '${vSTART_DT}' AND '${vEND_DT}'
+        -- AND t1.traffic_partner IN ('partnerA')
+        -- AND t1.poc IN ('app','mw')
+        AND t1.amt > 0
+        AND t1.is_24via = '1' -- 24h 기준
+        AND t1.link_page_id_step NOT IN ('/search_result/tab/external_a','/search_result/external_b')
+  ) t1
+  GROUP BY NVL(get_json_object(link_log_body, '$.snippet_object.has_grp_image'), '#')
 )
-
-, via as (
-    select
-        nvl(get_json_object(lnkg_log_body, '$.snippet_object.has_grp_image'), '#') as has_grp_image,
-        nvl(sum(if(t1.IS_24VIA = '1', t1.weight,0)),0) as 24_via_cnt, -- 24 경유주문건수
-        nvl(sum(if(t1.IS_24VIA = '1', t1.amt,0)),0) as 24_via_amt -- 24 경유거래액
-    from
-            (
-            select t1.*
-            from search.sch_d_11st_vst_via_amt_ord_dic t1
-            where t1.ord_date between '${vBGN_DT}' and from_unixtime(unix_timestamp('${vEND_DT}', 'yyyyMMdd') + 3600 * 24 * 1, 'yyyyMMdd')
-            and t1.part_date between '${vBGN_DT}' and '${vEND_DT}'
-            -- and t1.alcmpn_drct_vst_fg_nm_sch in ('직방')
-            -- and t1.poc_clf in ('app','mw')
-            and t1.amt > 0
-            and t1.IS_24VIA = '1' -- 24h 기준
-            and t1.link_page_id_step not in ('/search_result/tab/amazontab','/search_result/amazon')
-            ) t1
-    group by nvl(get_json_object(lnkg_log_body, '$.snippet_object.has_grp_image'), '#')
-)
-
 
 -- result
-select
-    t1.has_grp_image as has_grp_image, 
-    nvl(t1.qc,0) as qc,
-    nvl(t1.imprs_cnt,0) as imprs_cnt, -- 노출수
-    nvl(t1.clk_cnt,0) as clk_cnt, -- 클릭수
-    nvl(t2.24_via_cnt,0) as 24_via_cnt, 
-    nvl(t2.24_via_amt,0) as 24_via_amt,
-    nvl(t1.clk_cnt,0)/nvl(t1.imprs_cnt,0) as ictr,
-    nvl(t2.24_via_cnt,0)/nvl(t1.imprs_cnt,0) as icvr,
-    nvl(t1.clk_cnt,0)/nvl(t1.qc,0) as qctr,
-    nvl(t2.24_via_cnt,0)/nvl(t1.qc,0) as qcvr
-from base t1
-left outer join via t2 on t1.has_grp_image=t2.has_grp_image
-
-
-
-
-
+SELECT
+    t1.has_grp_image,
+    NVL(t1.qc, 0)          AS qc,
+    NVL(t1.imprs_cnt, 0)   AS imprs_cnt, -- 노출수
+    NVL(t1.clk_cnt, 0)     AS clk_cnt,   -- 클릭수
+    NVL(t2.24_via_cnt, 0)  AS 24_via_cnt,
+    NVL(t2.24_via_amt, 0)  AS 24_via_amt,
+    NVL(t1.clk_cnt, 0)     / NVL(t1.imprs_cnt, 0) AS ictr,
+    NVL(t2.24_via_cnt, 0)  / NVL(t1.imprs_cnt, 0) AS icvr,
+    NVL(t1.clk_cnt, 0)     / NVL(t1.qc, 0)        AS qctr,
+    NVL(t2.24_via_cnt, 0)  / NVL(t1.qc, 0)        AS qcvr
+FROM base t1
+LEFT OUTER JOIN via t2
+  ON t1.has_grp_image = t2.has_grp_image;
